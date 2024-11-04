@@ -2,9 +2,9 @@ use abes_nice_procs::*;
 
 #[test]
 fn test() {
-    method!(here,
+    assert_eq!(method!(here,
         fn main() {
-            std::fs::write("output.md", "yooooooooooooo!");
+            print!("5");
         }
-    )
+    ), 5);
 }

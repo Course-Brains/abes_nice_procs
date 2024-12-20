@@ -8,3 +8,9 @@ fn test() {
         }
     ), 5);
 }
+#[derive(Test)]
+pub struct Asd<T> {
+    help: usize,
+    banan: Option<Vec<i128>>,
+    nawr: T
+}

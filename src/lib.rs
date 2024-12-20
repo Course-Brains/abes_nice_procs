@@ -171,3 +171,227 @@ pub fn method(attr: TokenStream) -> TokenStream {
         .parse::<TokenStream>()
         .unwrap()
 }
+enum What {
+    Struct,
+    Enum
+}
+impl What {
+    fn from_ident(ident: Ident) -> Option<What> {
+        match ident.to_string().as_str() {
+            "struct" => Some(What::Struct),
+            "enum" => Some(What::Enum),
+            _ => None
+        }
+    }
+}
+impl std::fmt::Display for What {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            What::Struct => write!(f, "struct"),
+            What::Enum => write!(f, "enum")
+        }
+    }
+}
+struct DeriveData {
+    what: What,
+    name: Ident,
+    generic: Vec<TokenTree>,
+    fields: Vec<Field>
+}
+impl DeriveData {
+    fn implement(&self, which: Which) -> String {
+        let mut out = String::new();
+        match which {
+            Which::From => {
+                out += "impl";
+                out += &self.generic.iter().map(|x| x.to_string()).collect::<String>();
+                out += " FromBinary for ";
+                out += &self.name.to_string();
+                // Second generic definition
+                for generic in self.generic.split(|x| {
+                    if let TokenTree::Punct(punct) = x {
+                        if punct.to_string() == "," {
+                            return true;
+                        }
+                    }
+                    return false;
+                }) {
+                    'inner: for token in generic.iter() {
+                        if let TokenTree::Punct(punct) = token {
+                            if punct.to_string() == ":" {
+                                break 'inner
+                            }
+                        }
+                        out += &token.to_string();
+                    }
+                    out += ",";
+                }
+                out.pop();
+                out += "{ fn from_binary(binary: &mut dyn std::io::Read) -> Self {";
+                for field in self.fields.iter() {
+                    out += "self.";
+                    out += &field.name;
+                    out += "=";
+                    out += &field.data_type;
+                    out += "::from_binary(binary),"
+                }
+                out += "}}";
+            }
+            Which::To => {
+                // ToBinary
+                out += "impl";
+                out += &self.generic.iter().map(|x| x.to_string()).collect::<String>();
+                out += " ToBinary for ";
+                out += &self.name.to_string();
+                for generic in self.generic.split(|x| {
+                    if let TokenTree::Punct(punct) = x {
+                        if punct.to_string() == "," {
+                            return true;
+                        }
+                    }
+                    return false;
+                }) {
+                    'inner: for token in generic.iter() {
+                        if let TokenTree::Punct(punct) = token {
+                            if punct.to_string() == ":" {
+                                break 'inner
+                            }
+                        }
+                        out += &token.to_string();
+                    }
+                    out += ",";
+                }
+                out.pop();
+                out += "{ fn to_binary(self, write: &mut dyn std::io::Write) {";
+                for field in self.fields.iter() {
+                    out += "self.";
+                    out += &field.name;
+                    out += ".to_binary(write);"
+                }
+                out += "}}";
+            }
+        }
+        return out
+    }
+}
+impl From<TokenStream> for DeriveData {
+    fn from(value: TokenStream) -> Self {
+        let mut iter = value.into_iter();
+        let mut what: Option<What> = None;
+        while let Some(token) = iter.next() {
+            if let TokenTree::Ident(ident) = token {
+                if let Some(wht) = What::from_ident(ident) {
+                    what = Some(wht);
+                    break;
+                }
+            }
+        }
+        let what = what.expect("Missing what it is(struct/enum)");
+        let name_tree = iter.next().expect("Missing name");
+        let name;
+        if let TokenTree::Ident(ident) = name_tree {
+            name = ident;
+        }
+        else {
+            panic!("FUCK FUCK FUCK FUCK FUCK FUCK")
+        }
+        let mut generic = Vec::new();
+        let mut fields_stream: Option<Vec<TokenTree>> = None;
+        while let Some(token) = iter.next() {
+            if let TokenTree::Group(group) = token {
+                fields_stream = Some(group.stream().into_iter().collect());
+                break;
+            }
+            else {
+                generic.push(token);
+            }
+        }
+        let fields_stream = fields_stream.expect("Could not get fields");
+        let mut fields = Vec::new();
+        for field_tokens in fields_stream.split(|x| {
+            if let TokenTree::Punct(punct) = x {
+                if punct.to_string() == ",".to_string() {
+                    return true
+                }
+            }
+            return false
+        }) {
+            fields.push(Field {
+                name: field_tokens[0].to_string(),
+                data_type: {
+                    field_tokens[2..].iter().map(|x| x.to_string()).collect::<String>()
+                }
+            })
+        }
+        DeriveData {
+            what,
+            name,
+            generic,
+            fields
+        }
+    }
+}
+impl std::fmt::Display for DeriveData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "name: {}\n", self.name)?;
+        write!(f, "what: {}\n", self.what)?;
+        write!(f, "generic: {:?}\n", self.generic.iter().map(|x| x.to_string()).collect::<Vec<String>>())?;
+        write!(f, "fields: {:?}", self.fields)
+    }
+}
+#[proc_macro_derive(Test)]
+pub fn test(input: TokenStream) -> TokenStream {
+    let mut out = String::new();
+    printer(&input, 0, &mut out);
+    let data = DeriveData::from(input);
+    std::fs::write("token.txt", out).unwrap();
+    std::fs::write("data.txt", data.to_string()).unwrap();
+    std::fs::write("out.txt", data.implement(Which::From)).unwrap();
+    TokenStream::new()
+}
+fn printer(input: &TokenStream, layer: usize, out: &mut String) {
+    for i in input.clone().into_iter() {
+        match i.clone() {
+            TokenTree::Group(group) => {
+                *out += &"\t".repeat(layer);
+                *out += "group:\n";
+                printer(&group.stream(), layer+1, out)
+            }
+            TokenTree::Ident(ident) => {
+                *out += &"\t".repeat(layer);
+                *out += "ident: ";
+                *out += &ident.to_string();
+                *out += "\n";
+            }
+            TokenTree::Literal(literal) => {
+                *out += &"\t".repeat(layer);
+                *out += "literal: ";
+                *out += &literal.to_string();
+                *out += "\n"
+            }
+            TokenTree::Punct(punct) => {
+                *out += &"\t".repeat(layer);
+                *out += "punct: ";
+                *out += &punct.to_string();
+                *out += "\n"
+            }
+        }
+    }
+}
+#[derive(Debug)]
+struct Field {
+    name: String,
+    data_type: String,
+}
+enum Which {
+    From,
+    To
+}
+#[proc_macro_derive(FromBinary)]
+pub fn from_binary(input: TokenStream) -> TokenStream {
+    DeriveData::from(input).implement(Which::From).parse::<TokenStream>().unwrap()
+}
+#[proc_macro_derive(ToBinary)]
+pub fn to_binary(input: TokenStream) -> TokenStream {
+    DeriveData::from(input).implement(Which::To).parse::<TokenStream>().unwrap()
+}
